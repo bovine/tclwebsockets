@@ -25,7 +25,7 @@ struct context_userdata_struct {
 
 
 struct websocket_session_struct {
-  const char *handler_name;
+  const char *handler_name;             // pointer into protocol definition.
   char session_array_name[64];
   char connection_cmd_name[64];
 
@@ -34,6 +34,7 @@ struct websocket_session_struct {
 
   //Tcl_Obj *queued_data;
   struct libwebsocket *socket;
+  struct libwebsocket_context *context;
 };
 
 
@@ -81,12 +82,12 @@ tclwebsockets_connectionCmd(ClientData cData, Tcl_Interp *interp, int objc, Tcl_
 
   switch (cmdIndex) {
   case CMD_CLOSE: {
-    libwebsocket_close_and_free_session(context, wsi, LWS_CLOSE_STATUS_NORMAL);
+    libwebsocket_close_and_free_session(session_data->context, session_data->socket, LWS_CLOSE_STATUS_NORMAL);
     
   }
 
   case CMD_WRITE: {
-    n = libwebsocket_write(wsi, p, n, LWS_WRITE_TEXT);
+    n = libwebsocket_write(session_data->socket, p, n, LWS_WRITE_TEXT);
     if (n < 0) {
       fprintf(stderr, "ERROR writing to socket");
       return 1;
@@ -129,11 +130,26 @@ tclwebsockets_contextCmd(ClientData cData, Tcl_Interp *interp, int objc, Tcl_Obj
     CMD_DELETE
   };
 
-  switch (cmd) {
+  int cmdIndex;
+
+
+  // basic command line processing
+  if (objc < 1) {
+    Tcl_WrongNumArgs (interp, 1, objv, "missing argument");
+    return TCL_ERROR;
+  }
+
+  if (Tcl_GetIndexFromObj(interp, objv[1], commands, "command", TCL_EXACT, &cmdIndex) != TCL_OK) {
+    return TCL_ERROR;
+  }
+
+  switch (cmdIndex) {
   case CMD_SERVICE: {
     // process pending socket events on the listener.
-    int n = libwebsocket_service(userdata->context, 50);
-
+    int n = libwebsocket_service(userdata->context, 50);    // block up to 50ms
+    if (n != 0) {
+      return TCL_ERROR;
+    }
     break;
   }
   case CMD_DELETE: {
@@ -148,7 +164,10 @@ tclwebsockets_contextCmd(ClientData cData, Tcl_Interp *interp, int objc, Tcl_Obj
 
     break;
   }
+  default: break;
+  } // end switch
 
+  return 0;
 }
 
 
@@ -186,6 +205,8 @@ callback_websocket_handler(struct libwebsocket_context *context,
     protocol = libwebsockets_get_protocol(wsi);
     session_data->handler_name = protocol->name;
     session_data->interp = context_data->interp;
+    session_data->socket = wsi;
+    session_data->context = context;
 
     // generate a unique session_array_name and connection_command_name.
     snprintf(session_data->session_array_name, sizeof(session_data->session_array_name), "::websockets::session_data%lu", nextCmdIndex);
@@ -203,49 +224,60 @@ callback_websocket_handler(struct libwebsocket_context *context,
 
 
   // Look up the definition from our registry array.
-  handlerRegistryList = Tcl_GetVar2Ex(interp, "::websockets::handlerRegistry", context->handler_name, TCL_GLOBAL_ONLY);
+  handlerRegistryList = Tcl_GetVar2Ex(session_data->interp, "::websockets::handlerRegistry", session_data->handler_name, TCL_GLOBAL_ONLY);
   if (handlerRegistryList == NULL) {
-    fprintf(stderr, "callback_websocket_handler called for an unknown protocol \"%s\"\n", context->handler_name);
+    fprintf(stderr, "callback_websocket_handler called for an unknown protocol \"%s\"\n", session_data->handler_name);
     return -1;
   }
 
 
   switch (reason) {
   case LWS_CALLBACK_ESTABLISHED: {
-    "established"
+    //"established"
+    break;
   }
 
   case LWS_CALLBACK_BROADCAST: {
-    "broadcast"
+    //"broadcast"
+    break;
   }
 
   case LWS_CALLBACK_FILTER_NETWORK_CONNECTION: {
     //"filter-network"
+    break;
   }
   case LWS_CALLBACK_FILTER_PROTOCOL_CONNECTION: {
-    "filter-protocol"
+    //"filter-protocol"
+    break;
   }
   case LWS_CALLBACK_HTTP: {
-    "http"
+    //"http"
+    break;
   }
   case LWS_CALLBACK_RECEIVE: {
-    "receive"
+    //"receive"
+    // do something with in, len
+    break;
   }
   case LWS_CALLBACK_SERVER_WRITEABLE: {
     if (session_data->queued_data != NULL) {
-      ...
+      //...
     }
+    break;
   }
 
   case LWS_CALLBACK_CLOSED: {
     // delete the Tcl command for this connection.
     // unset the session array.
+    break;
   }
 
+  default: break;
   }
 
     
 
+  return 0;
 }
 
 
@@ -327,7 +359,7 @@ tclwebsockets_listenCmd(ClientData cData, Tcl_Interp *interp, int objc, Tcl_Obj 
       }
 
       // save to variable
-      port = (int) long;
+      port = (int) lon;
       break;
     }
 
@@ -435,7 +467,7 @@ tclwebsockets_listenCmd(ClientData cData, Tcl_Interp *interp, int objc, Tcl_Obj 
       // populate the protocol structure array.
       for (q = 0; q < num_handlers; q++) {
 	Tcl_Obj *handlerNameObj;
-	const char *handlerName;
+	char *handlerName, *handlerNameCopy;
 	int handlerLen;
 	Tcl_Obj *handlerRegistryList;
 
@@ -452,12 +484,13 @@ tclwebsockets_listenCmd(ClientData cData, Tcl_Interp *interp, int objc, Tcl_Obj 
 	}
 
 	// Duplicate and copy the handler name.
-	protocols[q].name = ckalloc(handlerLen + 1);
-	if (protocols[q].name == NULL) {
+	handlerNameCopy = ckalloc(handlerLen + 1);
+	if (handlerNameCopy == NULL) {
 	  return TCL_ERROR;
 	}
-	strncpy(protocols[q].name, handlerName, handlerLen);
-	protocols[q].name[handlerLen] = '\0';
+	strncpy(handlerNameCopy, handlerName, handlerLen);
+	handlerNameCopy[handlerLen] = '\0';
+	protocols[q].name = handlerNameCopy;
 
 	// Set the callback and session structure size.
 	protocols[q].callback = callback_websocket_handler;
@@ -472,10 +505,10 @@ tclwebsockets_listenCmd(ClientData cData, Tcl_Interp *interp, int objc, Tcl_Obj 
       break;
     }
     default: return TCL_ERROR;
-    }
+    } // end switch
 
 
-  }
+  }  // end for
 
   // require port
   if (port == 0) {
@@ -503,10 +536,10 @@ tclwebsockets_listenCmd(ClientData cData, Tcl_Interp *interp, int objc, Tcl_Obj 
 
 
   // start listening.
-  context = libwebsocket_create_context(port, interface, protocols,
+  context = libwebsocket_create_context(port, interface_name, protocols,
 					libwebsocket_internal_extensions,
 					(use_ssl ? cert_path : NULL), (use_ssl ? key_path : NULL),
-					-1, -1, opts);
+					-1, -1, 0);
   if (context == NULL) {
     Tcl_AppendResult(interp, "libwebsocket init failed", NULL);
     ckfree((char*) userdata);
