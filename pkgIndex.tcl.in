@@ -1,0 +1,5 @@
+#
+# Tcl package index file for tclwebsockets @PACKAGE_VERSION@
+#
+package ifneeded tclwebsockets @PACKAGE_VERSION@ \
+    [list load [file join $dir @PKG_LIB_FILE@]]\n[list source [file join $dir tclwebsockets.tcl]]
