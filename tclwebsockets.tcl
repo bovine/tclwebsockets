@@ -1,3 +1,9 @@
+#
+# tclwebsockets
+#
+# Freely redistributable under the BSD license.  See LICENSE
+# for details.
+#
 
 
 proc websocket::handler {args} {
@@ -8,7 +14,7 @@ proc websocket::handler {args} {
 
 	set handlerName ""
 	set handlerStatevars ""
-	set handlerEvents ""
+	set handlerEvents 0
 	foreach {key value} $args {
 		switch -exact $key {
 			-name {
@@ -36,17 +42,27 @@ proc websocket::handler {args} {
 				foreach {eventName eventArgs eventProc} $value {
 					switch -exact $eventName {
 						"established" -
-						"broadcast" -
+						"client-connection-error" -
+						"client-established" -
+						"closed" -
 						"receive" -
-						"filter" {
-							# no problem
+						"client-receive" -
+						"client-receive-pong" -
+						"client-writeable" -
+						"server-writeable" -
+						"http" -
+						"broadcast" -
+						"filter-network-connection" -
+						"filter-protocol-connection" {
+							# recognized eventName
+							set ::websockets::handlerMethods($handlerName:$eventName) [list $eventArgs $eventProc]
 						}
 						default {
 							error "Unrecognized event: $eventName"
 						}
 					}
 				}
-				set handlerEvents $value
+				incr handlerEvents
 			}
 			default {
 				error "Unrecognized option: $key"
@@ -57,10 +73,10 @@ proc websocket::handler {args} {
 	if {$handlerName == ""} {
 		error "Required option -name was not given"
 	}
-	if {$handlerEvents == ""} {
+	if {$handlerEvents == 0} {
 		error "Require option -events was not given"
 	}
 
 
-	set ::websockets::handlerRegistry($handlerName) [list statevars $handlerStatevars events $handlerEvents]
+	set ::websockets::handlerRegistry($handlerName) [list statevars $handlerStatevars]
 }

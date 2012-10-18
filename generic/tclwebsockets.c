@@ -1,13 +1,13 @@
 /*
  * tclwebsockets
  *
- * Freely redistributable under the BSD license.  See license.terms
+ * Freely redistributable under the BSD license.  See LICENSE
  * for details.
  */
 
 #include <tcl.h>
 #include <string.h>
-#include <sys/syslimits.h>
+#include <limits.h>
 #include <libwebsockets.h>
 
 
@@ -26,7 +26,7 @@ struct context_userdata_struct {
 
 struct websocket_session_struct {
   const char *handler_name;             // pointer into protocol definition.
-  char session_array_name[64];
+  char statevar_namespace[64];
   char connection_cmd_name[64];
 
   Tcl_Interp *interp;
@@ -82,23 +82,41 @@ tclwebsockets_connectionCmd(ClientData cData, Tcl_Interp *interp, int objc, Tcl_
 
   switch (cmdIndex) {
   case CMD_CLOSE: {
+    if (objc != 2) {
+      Tcl_WrongNumArgs (interp, 1, objv, "close takes no arguments");
+      return TCL_ERROR;
+    }
     libwebsocket_close_and_free_session(session_data->context, session_data->socket, LWS_CLOSE_STATUS_NORMAL);
     
   }
 
   case CMD_WRITE: {
-    n = libwebsocket_write(session_data->socket, p, n, LWS_WRITE_TEXT);
-    if (n < 0) {
-      fprintf(stderr, "ERROR writing to socket");
-      return 1;
+    char *p;
+    int len, nsent;
+
+    if (objc != 3) {
+      Tcl_WrongNumArgs (interp, 1, objv, "value");
+      return TCL_ERROR;
     }
-    // otherwise add to queued_data
+
+    p = Tcl_GetStringFromObj (objv[2], &len);
+    if (len == 0) {
+      Tcl_AppendResult(interp, "invalid value", NULL);
+      return TCL_ERROR;
+    }
+
+    nsent = libwebsocket_write(session_data->socket, (unsigned char*) p, (size_t) len, LWS_WRITE_TEXT);
+    if (nsent < 0) {
+      // TODO: maybe add to queued_data?
+      Tcl_AppendResult(interp, "error writing to socket ", session_data->connection_cmd_name, NULL);
+      return TCL_ERROR;
+    }
   }
 
   default: break;
   }
 
-
+  return 0;
 }
 
 
@@ -170,7 +188,6 @@ tclwebsockets_contextCmd(ClientData cData, Tcl_Interp *interp, int objc, Tcl_Obj
   return 0;
 }
 
-
 /*
  *----------------------------------------------------------------------
  *
@@ -188,15 +205,35 @@ static int
 callback_websocket_handler(struct libwebsocket_context *context,
 		    struct libwebsocket *wsi,
 		    enum libwebsocket_callback_reasons reason,
-		    void *v_session_data, void *in, size_t len)
+		    void *v_session_data, void *indata, size_t lendata)
 {
+  static const char *reason_strings[] = {
+    "established",                 // LWS_CALLBACK_ESTABLISHED,
+    "client-connection-error",     // LWS_CALLBACK_CLIENT_CONNECTION_ERROR,
+    "client-established",          // LWS_CALLBACK_CLIENT_ESTABLISHED,
+    "closed",                      // LWS_CALLBACK_CLOSED,
+    "receive",                     // LWS_CALLBACK_RECEIVE,
+    "client-receive",              // LWS_CALLBACK_CLIENT_RECEIVE,
+    "client-receive-pong",         // LWS_CALLBACK_CLIENT_RECEIVE_PONG,
+    "client-writeable",            // LWS_CALLBACK_CLIENT_WRITEABLE,
+    "server-writeable",            // LWS_CALLBACK_SERVER_WRITEABLE,
+    "http",                        // LWS_CALLBACK_HTTP,
+    "broadcast",                   // LWS_CALLBACK_BROADCAST,
+    "filter-network-connection",   // LWS_CALLBACK_FILTER_NETWORK_CONNECTION,
+    "filter-protocol-connection"   // LWS_CALLBACK_FILTER_PROTOCOL_CONNECTION,
+  };
+
   struct websocket_session_struct *session_data = (struct websocket_session_struct *)v_session_data;
   struct context_userdata_struct *context_data = (struct context_userdata_struct*)libwebsockets_get_user_data(context);
-  Tcl_Obj *handlerRegistryList = NULL;
+  Tcl_Obj *procargs = NULL;      // list of varnames
+  Tcl_Obj *procbody = NULL;      // code body
+  Tcl_Obj *statevars = NULL;     // list of varnames
 
 
+  //
   // When a connection is first established, do some extra work to
   // intitialize the session structure.
+  //
   if (reason == LWS_CALLBACK_ESTABLISHED) {
     const struct libwebsocket_protocols *protocol;
     static unsigned long nextCmdIndex = 0;
@@ -209,8 +246,10 @@ callback_websocket_handler(struct libwebsocket_context *context,
     session_data->context = context;
 
     // generate a unique session_array_name and connection_command_name.
-    snprintf(session_data->session_array_name, sizeof(session_data->session_array_name), "::websockets::session_data%lu", nextCmdIndex);
+    snprintf(session_data->statevar_namespace, sizeof(session_data->statevar_namespace), "::websockets::statevars%lu", nextCmdIndex);
     snprintf(session_data->connection_cmd_name, sizeof(session_data->connection_cmd_name), "websocket%lu", nextCmdIndex++);
+
+    Tcl_CreateNamespace(session_data->interp, session_data->statevar_namespace, NULL, NULL);
 
     //session_data->queued_data = NULL;
 
@@ -222,15 +261,122 @@ callback_websocket_handler(struct libwebsocket_context *context,
   }
 
 
+  //
+  // Look up the definition from our registry array to find the list of "state variables".
+  //
+  {
+    int i, listc;
+    Tcl_Obj **listv;
+    Tcl_Obj *handlerRegistryList = NULL;   // key-value list of attributes (but currently only one possible key).
 
-  // Look up the definition from our registry array.
-  handlerRegistryList = Tcl_GetVar2Ex(session_data->interp, "::websockets::handlerRegistry", session_data->handler_name, TCL_GLOBAL_ONLY);
-  if (handlerRegistryList == NULL) {
-    fprintf(stderr, "callback_websocket_handler called for an unknown protocol \"%s\"\n", session_data->handler_name);
-    return -1;
+    handlerRegistryList = Tcl_GetVar2Ex(session_data->interp, "::websockets::handlerRegistry", session_data->handler_name, TCL_GLOBAL_ONLY);
+    if (handlerRegistryList == NULL) {
+      fprintf(stderr, "callback_websocket_handler called for an unknown protocol \"%s\"\n", session_data->handler_name);
+      return -1;
+    }
+    if (Tcl_ListObjGetElements(session_data->interp, handlerRegistryList, &listc, &listv) == TCL_ERROR || (listc % 2) != 0) {
+      return -1;                 // not a list, or not an even-numbered list of elements.
+    }
+   
+    // walk through the key-value list and save the value associated with the "statevars" key.
+    for (i = 0; i < listc; i += 2) {
+      const char *keyName = Tcl_GetString(listv[i]);
+      if (strcmp(keyName, "statevars") == 0) {
+	statevars = listv[i+1];
+	//Tcl_IncrRefCount(statevars);
+	break;
+      }
+    }
   }
 
 
+  //
+  // Look up the details about the proc that was registered for this event.
+  //
+  if (reason >= sizeof(reason_strings) / sizeof(reason_strings[0])) {
+    // event reason is out of range, so no handler is possible.
+    return 0;
+
+  } else {
+    int listc;
+    Tcl_Obj **listv;
+    Tcl_Obj *handlerMethodList;
+
+    // build the name of the array element to find.
+    int methodKeyLength = strlen(session_data->handler_name) + 1 + strlen(reason_strings[reason]) + 1;;
+    char *methodKey = ckalloc(methodKeyLength);
+    snprintf(methodKey, methodKeyLength, "%s:%s", session_data->handler_name, reason_strings[reason]);
+
+    // Fetch the array element that should contain the registered proc.
+    // Should be list of 2 elements: procargs procbody
+    handlerMethodList = Tcl_GetVar2Ex(session_data->interp, "::websockets::handlerMethods", methodKey, TCL_GLOBAL_ONLY);
+    ckfree(methodKey);
+    if (handlerMethodList == NULL) {
+      // no handler defined for this event method.
+      return 0;
+    }
+    if (Tcl_ListObjGetElements(session_data->interp, handlerMethodList, &listc, &listv) == TCL_ERROR || listc != 2) {
+      // invalid method definition.  Expecting list of: procargs procbody
+      return 0;
+    }
+    procargs = listv[0];
+    procbody = listv[1];
+    //Tcl_IncrRefCount(procargs);
+    //Tcl_IncrRefCount(procbody);
+  }
+
+
+
+  //
+  // Bind all of the state vars using "namespace upvar".
+  //
+  {
+    int i, listc;
+    Tcl_Obj **listv;
+
+    if (statevars != NULL && Tcl_ListObjGetElements(session_data->interp, statevars, &listc, &listv) != TCL_ERROR && listc > 0) {
+      Tcl_Obj *cmdAry[3] = { 
+	Tcl_NewStringObj("namespace", -1), 
+	Tcl_NewStringObj("upvar", -1), 
+	Tcl_NewStringObj(session_data->statevar_namespace, -1)
+      };
+      Tcl_Obj *cmdListObj = Tcl_NewListObj(sizeof(cmdAry) / sizeof(cmdAry[0]), cmdAry);
+      Tcl_IncrRefCount(cmdListObj);
+
+      for (i = 0; i < listc; i++) {
+	Tcl_ListObjAppendElement(session_data->interp, cmdListObj, listv[i]);
+	Tcl_ListObjAppendElement(session_data->interp, cmdListObj, listv[i]);
+      }
+
+      Tcl_EvalObjEx(session_data->interp, cmdListObj, 0);
+      Tcl_DecrRefCount(cmdListObj);
+    }
+  }
+
+
+  //
+  // Set the proc arguments.
+  //
+  {
+    int listc;
+    Tcl_Obj **listv;
+    
+    if (Tcl_ListObjGetElements(session_data->interp, procargs, &listc, &listv) != TCL_ERROR) {
+      if (listc > 0) {
+	Tcl_SetVar(session_data->interp, Tcl_GetString(listv[0]), session_data->connection_cmd_name, 0);
+      }
+      if (listc > 1) {
+	// TODO: use binary instead of string? Tcl_NewByteArrayObj(indata, lendata)
+	Tcl_Obj *dataobj = Tcl_NewStringObj(indata, lendata);
+	Tcl_SetVar2Ex(session_data->interp, Tcl_GetString(listv[1]), NULL, dataobj, 0);
+      }
+    }
+  }
+
+  Tcl_EvalObjEx(session_data->interp, procbody, 0);  
+
+
+  /*
   switch (reason) {
   case LWS_CALLBACK_ESTABLISHED: {
     //"established"
@@ -260,9 +406,10 @@ callback_websocket_handler(struct libwebsocket_context *context,
     break;
   }
   case LWS_CALLBACK_SERVER_WRITEABLE: {
-    if (session_data->queued_data != NULL) {
+    // TODO: consider implementing queuing for sent data.
+    //if (session_data->queued_data != NULL) {
       //...
-    }
+    //}
     break;
   }
 
@@ -274,7 +421,7 @@ callback_websocket_handler(struct libwebsocket_context *context,
 
   default: break;
   }
-
+*/
     
 
   return 0;
