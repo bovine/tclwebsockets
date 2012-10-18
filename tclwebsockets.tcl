@@ -5,8 +5,10 @@
 # for details.
 #
 
+namespace eval websockets {
 
-proc websocket::handler {args} {
+
+proc handler {args} {
 
 	if {[llength $args] < 2 || [llength $args] % 2 != 0} {
 		error "Expecting even number of arguments"
@@ -21,7 +23,7 @@ proc websocket::handler {args} {
 				if {$handlerName != ""} {
 					error "Already supplied: $key"
 				}
-				if {![string is wordchar -strict $value]} {
+				if {![string is graph -strict $value]} {
 					error "Invalid name: $value"
 				}
 				set handlerName $value
@@ -33,7 +35,7 @@ proc websocket::handler {args} {
 				set handlerStatevars $value
 			}
 			-events {
-				if {$handlerEvents != ""} {
+				if {$handlerEvents != 0} {
 					error "Already supplied: $key"
 				}
 				if {[llength $value] < 3 || [llength $value] % 3 != 0} {
@@ -79,4 +81,7 @@ proc websocket::handler {args} {
 
 
 	set ::websockets::handlerRegistry($handlerName) [list statevars $handlerStatevars]
+}
+
+
 }

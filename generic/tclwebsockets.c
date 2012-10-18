@@ -229,6 +229,11 @@ callback_websocket_handler(struct libwebsocket_context *context,
   Tcl_Obj *procbody = NULL;      // code body
   Tcl_Obj *statevars = NULL;     // list of varnames
 
+  if (reason >= sizeof(reason_strings) / sizeof(reason_strings[0])) {
+    // event reason is out of range, so no handler is possible.
+    return 0;
+  }
+
 
   //
   // When a connection is first established, do some extra work to
@@ -293,11 +298,7 @@ callback_websocket_handler(struct libwebsocket_context *context,
   //
   // Look up the details about the proc that was registered for this event.
   //
-  if (reason >= sizeof(reason_strings) / sizeof(reason_strings[0])) {
-    // event reason is out of range, so no handler is possible.
-    return 0;
-
-  } else {
+  {
     int listc;
     Tcl_Obj **listv;
     Tcl_Obj *handlerMethodList;
@@ -456,7 +457,7 @@ tclwebsockets_listenCmd(ClientData cData, Tcl_Interp *interp, int objc, Tcl_Obj 
   
   static CONST char *subOptions[] = {
     "-port",
-    "-interface"
+    "-interface",
     "-ssl",
     "-certificate",
     "-privatekey",

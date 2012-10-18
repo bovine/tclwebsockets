@@ -1,7 +1,9 @@
-# -*- tcl -*-
+#!/usr/local/bin/tclsh8.5
+
+package require tclwebsockets 1.0
 
 
-websocket::handler \
+websockets::handler \
 	-name "dumb-increment-protocol" \
 	-statevars {foo moo} \
 	-events {
@@ -16,28 +18,39 @@ websocket::handler \
 		receive {wsi data} {
 			puts "got $data"
 		}
-		filter {wsi headers} {
+		filter-network-connection {wsi - headers} {
 			parray headers
 			return 0
 		}
-		writable {wsi} {
+		client-writeable {wsi} {
 			$wsi write $moo
 		}
 	}
 
 
-websocket::listen -port 7681 -interface "127.0.0.1" \
-	-ssl 1 -certificate "cert.pem" -privatekey "private.pem" \
-	-handlers [list "dumb-increment-protocol" "lws-mirror-protocol"]
+
+set l [websockets::listen -port 7681 -interface "127.0.0.1" \
+		   -handlers [list "dumb-increment-protocol"]]
+
+puts $l
 
 
+#websockets::listen -port 7681 -interface "127.0.0.1" \
+#	-ssl 1 -certificate "cert.pem" -privatekey "private.pem" \
+#	-handlers [list "dumb-increment-protocol"]
 
-        context = libwebsocket_create_context(port, interface, protocols,
-                                libwebsocket_internal_extensions,
-                                cert_path, key_path, -1, -1, opts);
-        if (context == NULL) {
-                fprintf(stderr, "libwebsocket init failed\n");
-                return -1;
-        }
 
+proc idle_service_sock {sock} {
+	$sock service
+	after idle "idle_service_sock $sock"
+}
+
+puts "now servicing listener..."
+idle_service_sock $l
+vwait forever
+
+
+#while {1} {
+#	$l service
+#}
 

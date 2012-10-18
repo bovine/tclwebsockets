@@ -21,6 +21,11 @@
 
 #SAMPLE_NEW_VAR	= @SAMPLE_NEW_VAR@
 
+# NB FIX the configure script to do this the right way
+LWSINCLUDES=-I"/usr/local/include"
+LWSLLIBS=-L"/usr/local/lib" -lwebsockets
+
+
 #========================================================================
 # Nothing of the variables below this line should need to be changed.
 # Please check the TARGETS section below to make sure the make targets
@@ -108,7 +113,7 @@ RANLIB		= @RANLIB@
 RANLIB_STUB	= @RANLIB_STUB@
 SHLIB_CFLAGS	= @SHLIB_CFLAGS@
 SHLIB_LD	= @SHLIB_LD@
-SHLIB_LD_LIBS	= @SHLIB_LD_LIBS@
+SHLIB_LD_LIBS	= @SHLIB_LD_LIBS@ $(LWSLLIBS)
 STLIB_LD	= @STLIB_LD@
 #TCL_DEFS	= @TCL_DEFS@
 TCL_BIN_DIR	= @TCL_BIN_DIR@
@@ -143,10 +148,6 @@ TCLSH   	= $(TCLSH_ENV) $(TCLSH_PROG)
 
 
 SHARED_BUILD	= @SHARED_BUILD@
-
-# NB FIX the configure script to do this the right way
-LWSINCLUDES=-I"/usr/local/include"
-LWSLLIBS=-L"/usr/local/lib" -lwebsockets
 
 INCLUDES	= @PKG_INCLUDES@ @TCL_INCLUDES@ $(LWSINCLUDES)
 #INCLUDES	= @PKG_INCLUDES@ @TCL_INCLUDES@ @TK_INCLUDES@ @TK_XINCLUDES@
@@ -237,8 +238,7 @@ install-libraries: libraries
 # 	done
 
 test: binaries libraries
-	$(TCLSH) `@CYGPATH@ $(srcdir)/tests/all.tcl` $(TESTFLAGS)
-	$(TCLSH) `@CYGPATH@ $(srcdir)/tests/dict.tcl` $(TESTFLAGS)
+	$(TCLSH) `@CYGPATH@ $(srcdir)/tests/test-server.tcl` $(TESTFLAGS)
 
 shell: binaries libraries
 	@$(TCLSH) $(SCRIPT)
