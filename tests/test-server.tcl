@@ -28,9 +28,30 @@ websockets::handler \
 	}
 
 
+websockets::handler \
+	-name "lws-mirror-protocol" \
+	-events {
+		established wsi {
+			puts stderr "callback_lws_mirror: LWS_CALLBACK_ESTABLISHED"
+		}	     
+		broadcast {wsi data} {
+			puts stderr "broadcast got $data"
+			if {[catch { $wsi write $data } ]} {
+				puts stderr "callback_lws_mirror: mirror write failed"
+			}
+		} 
+		receive {wsi data} {
+			puts stderr "got $data"
+		}
+		client-writeable {wsi} {
+			$wsi write $moo
+		}
+	}
+
+
 
 set l [websockets::listen -port 7681 -interface "127.0.0.1" \
-		   -handlers [list "dumb-increment-protocol"]]
+		   -handlers [list "dumb-increment-protocol" "lws-mirror-protocol"]]
 
 puts $l
 
