@@ -234,6 +234,7 @@ callback_websocket_handler(struct libwebsocket_context *context,
     return 0;
   }
 
+  //fprintf(stderr, "callback_websocket_handler got reason %d\n", (int) reason);
 
   //
   // When a connection is first established, do some extra work to
@@ -250,6 +251,8 @@ callback_websocket_handler(struct libwebsocket_context *context,
     session_data->socket = wsi;
     session_data->context = context;
 
+    //fprintf(stderr, "callback_websocket_handler initializing session_data \"%s\"\n", protocol->name);
+
     // generate a unique session_array_name and connection_command_name.
     snprintf(session_data->statevar_namespace, sizeof(session_data->statevar_namespace), "::websockets::statevars%lu", nextCmdIndex);
     snprintf(session_data->connection_cmd_name, sizeof(session_data->connection_cmd_name), "websocket%lu", nextCmdIndex++);
@@ -265,6 +268,14 @@ callback_websocket_handler(struct libwebsocket_context *context,
 
   }
 
+  if (reason == LWS_CALLBACK_FILTER_NETWORK_CONNECTION || reason == LWS_CALLBACK_FILTER_PROTOCOL_CONNECTION) {
+    //fprintf(stderr, "skipping.\n");
+    return 0;
+  }
+  if (!session_data || !session_data->socket) {
+    //fprintf(stderr, "bailing.\n");
+    return 0;
+  }
 
   //
   // Look up the definition from our registry array to find the list of "state variables".
